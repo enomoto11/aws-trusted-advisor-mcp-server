@@ -18,6 +18,7 @@
 - Node.js 14以上
 - npm または yarn
 - AWS アカウントとIAMユーザー (Trusted Advisor および関連サービスへのアクセス権が必要)
+- または Docker と Docker Compose (コンテナで実行する場合)
 
 ### インストール
 
@@ -31,6 +32,21 @@ npm install
 
 # 開発モードで実行
 npm run dev
+```
+
+### Dockerを使用した実行
+
+プロジェクトはDockerコンテナとしても実行できます。
+
+```bash
+# イメージをビルドして起動
+docker-compose up -d
+
+# ログの確認
+docker-compose logs -f
+
+# コンテナの停止
+docker-compose down
 ```
 
 ### AWS認証情報の設定
@@ -92,7 +108,7 @@ Cursorエディタでこのツールを使用するには、以下の手順に�
 5. 「Add MCP」または「MCPを追加」ボタンをクリックします
 6. 以下の情報を入力します：
    - Name: `Trusted Advisor`
-   - URL: `http://localhost:3000`
+   - URL: `http://localhost:3000`（直接実行の場合）または `http://localhost:3001`（Dockerコンテナ実行の場合）
 7. 「Add」または「追加」ボタンをクリックして保存します
 
 ### 3. Cursor内での使用方法
@@ -119,6 +135,8 @@ Cursorエディタでこのツールを使用するには、以下の手順に�
 - `POST /execute`: ツールを実行
 
 ### ツールの実行例
+
+以下の例では、ローカル実行時のポート3000を使用しています。Dockerコンテナ実行時はポート3001に置き換えてください。
 
 #### 低利用率EC2インスタンスの停止提案
 
