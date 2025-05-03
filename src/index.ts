@@ -3,7 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { config } from './config';
 import { handleToolRequest } from './tools';
-import { ToolRequest } from './types';
+import { ToolRequest, ToolResponse } from './types';
 
 // 環境変数を読み込む
 dotenv.config();
@@ -18,7 +18,7 @@ app.use(express.json());
 // ルートエンドポイント
 app.get('/', (req: Request, res: Response) => {
   res.json({ 
-    message: 'MCPサーバーが正常に動作しています',
+    message: 'AWS Trusted Advisor MCPサーバーが正常に動作しています',
     version: '1.0.0'
   });
 });
@@ -26,7 +26,11 @@ app.get('/', (req: Request, res: Response) => {
 // 利用可能なツールのリストを返すエンドポイント
 app.get('/tools', (req: Request, res: Response) => {
   res.json({ 
-    tools: config.tools 
+    tools: config.tools.map(tool => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters
+    }))
   });
 });
 
@@ -43,13 +47,13 @@ app.post('/execute', (req: Request, res: Response) => {
         });
       }
       
-      const result = await handleToolRequest(toolRequest);
+      const response: ToolResponse = await handleToolRequest(toolRequest);
       
-      if (result.status === 'error') {
-        return res.status(400).json(result);
+      if (response.status === 'error') {
+        return res.status(400).json(response);
       }
       
-      res.json(result);
+      res.json(response);
     } catch (error) {
       res.status(500).json({
         status: 'error',
@@ -63,6 +67,6 @@ app.post('/execute', (req: Request, res: Response) => {
 
 // サーバー起動
 app.listen(PORT, () => {
-  console.log(`MCPサーバーが起動しました: http://localhost:${PORT}`);
+  console.log(`AWS Trusted Advisor MCPサーバーが起動しました: http://localhost:${PORT}`);
   console.log(`利用可能なツール数: ${config.tools.length}`);
 }); 
