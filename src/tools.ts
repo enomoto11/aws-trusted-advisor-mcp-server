@@ -1,5 +1,4 @@
 import AWS from 'aws-sdk';
-import { Tool } from './types';
 
 // ツール実装の型定義
 type ToolImplementation = {
