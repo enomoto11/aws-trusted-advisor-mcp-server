@@ -2,6 +2,8 @@
 
 このプロジェクトは、AWS Trusted Advisorの機能を活用するMCP (Multimodal Conversational Processing) サーバーを提供します。AWS Trusted Advisorのチェック結果に基づいて、EC2インスタンスの停止、EBSスナップショットの作成など、推奨される変更を提案します。**重要: このツールは実際に変更を行わず、IaCで管理された環境でも安全に使用できます。**
 
+リポジトリURL: [https://github.com/enomoto11/aws-trusted-advisor-mcp-server](https://github.com/enomoto11/aws-trusted-advisor-mcp-server)
+
 ## 機能
 
 - **低利用率EC2インスタンスの停止提案**: Trusted Advisorによって検出された低利用率のEC2インスタンスを特定し、タグに基づいて停止の提案をします
@@ -21,8 +23,8 @@
 
 ```bash
 # リポジトリをクローン
-git clone <リポジトリURL>
-cd trusted-advisor
+git clone https://github.com/enomoto11/aws-trusted-advisor-mcp-server.git
+cd aws-trusted-advisor-mcp-server
 
 # 依存関係のインストール
 npm install
