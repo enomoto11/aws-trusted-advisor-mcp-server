@@ -1,72 +1,75 @@
 import express, { Request, Response } from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
+import bodyParser from 'body-parser';
 import { config } from './config';
-import { handleToolRequest } from './tools';
-import { ToolRequest, ToolResponse } from './types';
+import { implementTools } from './tools';
 
-// 環境変数を読み込む
-dotenv.config();
-
+// サーバーの初期化
 const app = express();
-const PORT = config.port;
+app.use(bodyParser.json());
 
-// ミドルウェアの設定
-app.use(cors());
-app.use(express.json());
-
-// ルートエンドポイント
+// ルートエンドポイント - サーバーのステータスを返す
 app.get('/', (req: Request, res: Response) => {
-  res.json({ 
-    message: 'AWS Trusted Advisor MCPサーバーが正常に動作しています',
+  res.json({
+    status: 'ok',
+    message: 'MCPサーバーが正常に動作しています',
     version: '1.0.0'
   });
 });
 
-// 利用可能なツールのリストを返すエンドポイント
+// ツールのリストを取得するエンドポイント
 app.get('/tools', (req: Request, res: Response) => {
-  res.json({ 
-    tools: config.tools.map(tool => ({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters
-    }))
+  res.json({
+    tools: config.tools
   });
 });
 
-// ツール実行エンドポイント
-app.post('/execute', (req: Request, res: Response) => {
-  const handleAsync = async () => {
+// ツールを実行するエンドポイント
+app.post('/execute', function(req: Request, res: Response) {
+  const executeToolAsync = async () => {
     try {
-      const toolRequest: ToolRequest = req.body;
+      const { toolName, parameters } = req.body;
       
-      if (!toolRequest || !toolRequest.name) {
-        return res.status(400).json({ 
-          status: 'error', 
-          error: 'ツール名が指定されていません' 
+      // ツールの存在確認
+      const tool = config.tools.find(t => t.name === toolName);
+      if (!tool) {
+        return res.status(404).json({
+          status: 'error',
+          error: `ツール "${toolName}" は存在しません`
         });
       }
       
-      const response: ToolResponse = await handleToolRequest(toolRequest);
-      
-      if (response.status === 'error') {
-        return res.status(400).json(response);
+      // ツールの実装を取得
+      const toolImplementation = implementTools[toolName];
+      if (!toolImplementation) {
+        return res.status(500).json({
+          status: 'error',
+          error: `ツール "${toolName}" の実装が見つかりません`
+        });
       }
       
-      res.json(response);
-    } catch (error) {
+      // ツールを実行
+      const result = await toolImplementation.execute(parameters || {});
+      
+      // 結果を返す
+      res.json({
+        status: 'success',
+        data: result
+      });
+    } catch (error: any) {
+      console.error('ツール実行中にエラーが発生しました:', error);
       res.status(500).json({
         status: 'error',
-        error: error instanceof Error ? error.message : '不明なエラーが発生しました'
+        error: error.message || '不明なエラーが発生しました'
       });
     }
   };
-  
-  handleAsync();
+
+  executeToolAsync();
 });
 
-// サーバー起動
-app.listen(PORT, () => {
-  console.log(`AWS Trusted Advisor MCPサーバーが起動しました: http://localhost:${PORT}`);
+// サーバーの起動
+const port = config.port;
+app.listen(port, () => {
+  console.log(`MCPサーバーが起動しました: http://localhost:${port}`);
   console.log(`利用可能なツール数: ${config.tools.length}`);
 }); 
