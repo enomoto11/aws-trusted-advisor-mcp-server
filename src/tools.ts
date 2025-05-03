@@ -37,10 +37,10 @@ async function getTrustedAdvisorCheckResults(
   }
 }
 
-// 低利用率EC2インスタンスの特定と停止
+// 低利用率EC2インスタンスの特定と停止提案
 const lowUtilizationEC2InstancesTool: ToolImplementation = {
   async execute(params) {
-    const { region = 'all', tagKey = 'environment', tagValue = 'dev', dryRun = true } = params;
+    const { region = 'all', tagKey = 'environment', tagValue = 'dev' } = params;
     const regionToUse = region === 'all' ? 'us-east-1' : region;
     
     try {
@@ -138,72 +138,69 @@ const lowUtilizationEC2InstancesTool: ToolImplementation = {
               tag.Key === tagKey && tag.Value === tagValue
             );
             
-            const instanceWithTag = {
+            const instanceDetail = {
               ...filteredInstances.find(i => i.instanceId === instance.InstanceId),
               tagMatch,
-              tags: tags.map(tag => ({ key: tag.Key, value: tag.Value }))
+              tags: tags.map(tag => ({ key: tag.Key, value: tag.Value })),
+              instanceType: instance.InstanceType || 'N/A',
+              state: instance.State?.Name || 'N/A',
+              launchTime: instance.LaunchTime ? instance.LaunchTime.toISOString() : 'N/A'
             };
             
-            instancesWithTags.push(instanceWithTag);
+            instancesWithTags.push(instanceDetail);
             
             // 条件に一致するインスタンスを停止対象に追加
             if (tagMatch && instance.State?.Name !== 'stopped') {
               instancesToStop.push({
-                ...instanceWithTag,
-                currentState: instance.State?.Name
+                ...instanceDetail,
+                currentState: instance.State?.Name,
+                // TerraformやCloudFormationで管理されているかチェックするタグを探す
+                managedBy: tags.find(tag => 
+                  ['terraform:managed', 'aws:cloudformation:stack-name'].includes(tag.Key || '')
+                )
               });
             }
           }
         }
       }
       
-      // インスタンスの停止ロジック
-      const stoppedInstances: any[] = [];
-      
-      if (!dryRun) {
-        for (const instance of instancesToStop) {
-          if (!instance.instanceId || !instance.region) continue;
-          
-          try {
-            const ec2 = new AWS.EC2({ region: instance.region });
-            
-            // インスタンスを停止
-            const stopResult = await ec2.stopInstances({
-              InstanceIds: [instance.instanceId]
-            }).promise();
-            
-            const stoppedInstance = {
-              ...instance,
-              stopped: true,
-              stopResult
-            };
-            
-            stoppedInstances.push(stoppedInstance);
-            console.log(`EC2インスタンス ${instance.instanceId} を停止しました。`);
-          } catch (error: any) {
-            console.error(`EC2インスタンス ${instance.instanceId} の停止中にエラーが発生しました:`, error);
-            
-            const failedInstance = {
-              ...instance,
-              stopped: false,
-              error: error.message || 'Unknown error'
-            };
-            
-            stoppedInstances.push(failedInstance);
-          }
-        }
-      }
-      
       // 結果を返す
+      const stoppableCount = instancesToStop.length;
+      const managedCount = instancesToStop.filter(i => i.managedBy).length;
+      
+      // 提案を生成
+      const recommendations = instancesToStop.map(instance => {
+        const managedWarning = instance.managedBy 
+          ? `※注意: このインスタンスは ${instance.managedBy.key}=${instance.managedBy.value} で管理されています。変更はIaCツールを通じて行ってください。` 
+          : '';
+        
+        return {
+          instanceId: instance.instanceId,
+          region: instance.region,
+          instanceType: instance.instanceType,
+          currentState: instance.currentState,
+          utilizationData: instance.utilizationData,
+          recommendedAction: `EC2インスタンスを停止する: aws ec2 stop-instances --instance-ids ${instance.instanceId} --region ${instance.region}`,
+          terraformExample: instance.managedBy ? `# Terraformの例:
+resource "aws_instance" "${instance.instanceId.replace('i-', '')}" {
+  # 他の設定はそのままに
+  instance_id = "${instance.instanceId}"
+  # インスタンスを停止状態に設定
+  instance_initiated_shutdown_behavior = "stop"
+}` : null,
+          managedWarning
+        };
+      });
+      
       return {
-        message: dryRun 
-          ? `${instancesToStop.length}個のインスタンスが停止条件に一致しました（ドライラン）`
-          : `${stoppedInstances.filter(i => i.stopped).length}/${instancesToStop.length}個のインスタンスを停止しました`,
-        dryRun,
-        allLowUtilizationInstances: filteredInstances.length,
-        matchingTaggedInstances: instancesToStop.length,
-        stoppedInstances: dryRun ? [] : stoppedInstances,
-        instancesWithTags
+        message: `${stoppableCount}個のインスタンスを停止することを提案します（${managedCount}個はIaCで管理されています）`,
+        summary: {
+          totalLowUtilizationInstances: filteredInstances.length,
+          matchingTaggedInstances: instancesToStop.length,
+          managedByIaC: managedCount
+        },
+        recommendations,
+        allInstances: instancesWithTags
       };
     } catch (error: any) {
       console.error('低利用率EC2インスタンスの処理中にエラーが発生しました:', error);
@@ -216,10 +213,10 @@ const lowUtilizationEC2InstancesTool: ToolImplementation = {
   }
 };
 
-// EBSスナップショットの作成ツール
+// EBSスナップショットの作成提案ツール
 const ebsSnapshotsTool: ToolImplementation = {
   async execute(params) {
-    const { region = 'all', dryRun = true } = params;
+    const { region = 'all' } = params;
     const regionToUse = region === 'all' ? 'us-east-1' : region;
     
     try {
@@ -269,69 +266,98 @@ const ebsSnapshotsTool: ToolImplementation = {
         };
       }
       
-      // スナップショットの作成ロジック
-      const createdSnapshots: any[] = [];
+      // 管理ステータスを確認するためにボリュームの詳細情報とタグを取得
+      const volumesWithDetails: any[] = [];
       
-      if (!dryRun) {
-        // 各リージョンのボリュームを処理
-        const regionsToProcess = region === 'all'
-          ? [...new Set(filteredVolumes.map(volume => volume.region))]
-          : [region];
+      // 各リージョンのボリュームを処理
+      const regionsToProcess = region === 'all'
+        ? [...new Set(filteredVolumes.map(volume => volume.region))]
+        : [region];
+      
+      for (const regionToProcess of regionsToProcess) {
+        // リージョン固有のEC2クライアントを初期化
+        const ec2 = new AWS.EC2({ region: regionToProcess });
         
-        for (const regionToProcess of regionsToProcess) {
-          // リージョン固有のEC2クライアントを初期化
-          const ec2 = new AWS.EC2({ region: regionToProcess });
+        // そのリージョンのボリュームを取得
+        const regionVolumes = filteredVolumes.filter(volume => volume.region === regionToProcess);
+        
+        for (const volume of regionVolumes) {
+          if (!volume.volumeId) continue;
           
-          // そのリージョンのボリュームを取得
-          const regionVolumes = filteredVolumes.filter(volume => volume.region === regionToProcess);
-          
-          for (const volume of regionVolumes) {
-            if (!volume.volumeId) continue;
+          try {
+            // ボリュームの詳細情報を取得
+            const { Volumes } = await ec2.describeVolumes({
+              VolumeIds: [volume.volumeId]
+            }).promise();
             
-            try {
-              // スナップショットの説明
-              const description = `自動スナップショット - Trusted Advisor - ${new Date().toISOString()}`;
-              
-              // スナップショットを作成
-              const snapshot = await ec2.createSnapshot({
-                VolumeId: volume.volumeId,
-                Description: description
-              }).promise();
-              
-              const createdSnapshot = {
-                ...volume,
-                snapshotCreated: true,
-                snapshotId: snapshot.SnapshotId,
-                snapshotDescription: description,
-                timestamp: new Date().toISOString()
-              };
-              
-              createdSnapshots.push(createdSnapshot);
-              console.log(`EBSボリューム ${volume.volumeId} のスナップショットを作成しました: ${snapshot.SnapshotId}`);
-            } catch (error: any) {
-              console.error(`EBSボリューム ${volume.volumeId} のスナップショット作成中にエラーが発生しました:`, error);
-              
-              const failedSnapshot = {
-                ...volume,
-                snapshotCreated: false,
-                error: error.message || 'Unknown error'
-              };
-              
-              createdSnapshots.push(failedSnapshot);
-            }
+            if (!Volumes || Volumes.length === 0) continue;
+            
+            const volumeDetail = Volumes[0];
+            const tags = volumeDetail.Tags || [];
+            
+            // TerraformやCloudFormationで管理されているかチェックするタグを探す
+            const managedBy = tags.find(tag => 
+              ['terraform:managed', 'aws:cloudformation:stack-name'].includes(tag.Key || '')
+            );
+            
+            volumesWithDetails.push({
+              ...volume,
+              size: volumeDetail.Size,
+              volumeType: volumeDetail.VolumeType,
+              availabilityZone: volumeDetail.AvailabilityZone,
+              state: volumeDetail.State,
+              createTime: volumeDetail.CreateTime ? volumeDetail.CreateTime.toISOString() : 'N/A',
+              tags: tags.map(tag => ({ key: tag.Key, value: tag.Value })),
+              managedBy
+            });
+          } catch (error: any) {
+            console.error(`EBSボリューム ${volume.volumeId} の詳細取得中にエラーが発生しました:`, error);
+            volumesWithDetails.push({
+              ...volume,
+              error: error.message || 'Unknown error'
+            });
           }
         }
       }
       
+      // 提案を生成
+      const recommendations = volumesWithDetails.map(volume => {
+        const managedWarning = volume.managedBy 
+          ? `※注意: このボリュームは ${volume.managedBy.key}=${volume.managedBy.value} で管理されています。変更はIaCツールを通じて行ってください。` 
+          : '';
+        
+        const snapshotDescription = `Backup-${volume.volumeId}-${new Date().toISOString()}`;
+        
+        return {
+          volumeId: volume.volumeId,
+          region: volume.region,
+          lastSnapshot: volume.lastSnapshot,
+          volumeType: volume.volumeType,
+          size: volume.size,
+          recommendedAction: `スナップショットを作成する: aws ec2 create-snapshot --volume-id ${volume.volumeId} --description "${snapshotDescription}" --region ${volume.region}`,
+          terraformExample: volume.managedBy ? `# Terraformの例:
+resource "aws_ebs_snapshot" "${volume.volumeId.replace('vol-', '')}" {
+  volume_id    = "${volume.volumeId}"
+  description  = "${snapshotDescription}"
+  tags = {
+    Name = "Backup-${volume.volumeId}"
+  }
+}` : null,
+          managedWarning
+        };
+      });
+      
+      const managedCount = volumesWithDetails.filter(v => v.managedBy).length;
+      
       // 結果を返す
       return {
-        message: dryRun 
-          ? `${filteredVolumes.length}個のEBSボリュームがバックアップの対象です（ドライラン）`
-          : `${createdSnapshots.filter(s => s.snapshotCreated).length}/${filteredVolumes.length}個のEBSボリュームのスナップショットを作成しました`,
-        dryRun,
-        volumesNeedingBackup: filteredVolumes.length,
-        createdSnapshots: dryRun ? [] : createdSnapshots,
-        volumes: filteredVolumes
+        message: `${volumesWithDetails.length}個のEBSボリュームのスナップショットを作成することを提案します（${managedCount}個はIaCで管理されています）`,
+        summary: {
+          totalVolumesNeedingBackup: filteredVolumes.length,
+          managedByIaC: managedCount
+        },
+        recommendations,
+        volumes: volumesWithDetails
       };
     } catch (error: any) {
       console.error('EBSスナップショット処理中にエラーが発生しました:', error);
@@ -344,11 +370,9 @@ const ebsSnapshotsTool: ToolImplementation = {
   }
 };
 
-// 公開されたIAMアクセスキーの無効化ツール
+// 公開されたIAMアクセスキーの無効化提案ツール
 const exposedAccessKeysTool: ToolImplementation = {
   async execute(params) {
-    const { dryRun = true } = params;
-    
     try {
       // AWS認証情報を設定（Support APIのリージョンはus-east-1のみ）
       configureAWS('us-east-1');
@@ -381,55 +405,88 @@ const exposedAccessKeysTool: ToolImplementation = {
         };
       });
       
-      // アクセスキーの無効化ロジック
-      const disabledKeys: any[] = [];
+      // IAMユーザーの詳細情報を取得
+      const iam = new AWS.IAM();
+      const usersWithDetails: any[] = [];
       
-      if (!dryRun) {
-        // IAMクライアントを初期化
-        const iam = new AWS.IAM();
+      for (const key of exposedKeys) {
+        if (!key.accessKeyId || !key.username) continue;
         
-        for (const key of exposedKeys) {
-          if (!key.accessKeyId || !key.username) continue;
+        try {
+          // IAMユーザーの詳細情報を取得
+          const { User } = await iam.getUser({
+            UserName: key.username
+          }).promise();
           
-          try {
-            // アクセスキーを無効化
-            await iam.updateAccessKey({
-              AccessKeyId: key.accessKeyId,
-              Status: 'Inactive',
-              UserName: key.username
-            }).promise();
-            
-            const disabledKey = {
-              ...key,
-              disabled: true,
-              disabledAt: new Date().toISOString()
-            };
-            
-            disabledKeys.push(disabledKey);
-            console.log(`IAMアクセスキー ${key.accessKeyId} を無効化しました (ユーザー: ${key.username})`);
-          } catch (error: any) {
-            console.error(`IAMアクセスキー ${key.accessKeyId} の無効化中にエラーが発生しました:`, error);
-            
-            const failedKey = {
-              ...key,
-              disabled: false,
-              error: error.message || 'Unknown error'
-            };
-            
-            disabledKeys.push(failedKey);
-          }
+          // ユーザーのタグを取得
+          const { Tags } = await iam.listUserTags({
+            UserName: key.username
+          }).promise();
+          
+          // TerraformやCloudFormationで管理されているかチェックするタグを探す
+          const managedBy = Tags?.find(tag => 
+            ['terraform:managed', 'aws:cloudformation:stack-name'].includes(tag.Key || '')
+          );
+          
+          usersWithDetails.push({
+            ...key,
+            arn: User?.Arn,
+            createDate: User?.CreateDate ? User.CreateDate.toISOString() : 'N/A',
+            tags: Tags?.map(tag => ({ key: tag.Key, value: tag.Value })) || [],
+            managedBy
+          });
+        } catch (error: any) {
+          console.error(`IAMユーザー ${key.username} の詳細取得中にエラーが発生しました:`, error);
+          usersWithDetails.push({
+            ...key,
+            error: error.message || 'Unknown error'
+          });
         }
       }
       
+      // 提案を生成
+      const recommendations = usersWithDetails.map(user => {
+        const managedWarning = user.managedBy 
+          ? `※注意: このIAMユーザーは ${user.managedBy.key}=${user.managedBy.value} で管理されています。変更はIaCツールを通じて行ってください。` 
+          : '';
+        
+        return {
+          accessKeyId: user.accessKeyId,
+          username: user.username,
+          location: user.location,
+          recommendedAction: `アクセスキーを無効化する: aws iam update-access-key --access-key-id ${user.accessKeyId} --status Inactive --user-name ${user.username}`,
+          terraformExample: user.managedBy ? `# Terraformの例:
+resource "aws_iam_access_key" "${user.username}_${user.accessKeyId.substring(0, 8)}" {
+  user    = "${user.username}"
+  status  = "Inactive"
+}` : null,
+          rotationExample: `# 新しいキーを作成し、古いキーを無効化、その後削除するプロセス:
+# 1. 新しいキーを作成
+aws iam create-access-key --user-name ${user.username}
+
+# 2. アプリケーションを新しいキーに更新
+
+# 3. 古いキーを無効化
+aws iam update-access-key --access-key-id ${user.accessKeyId} --status Inactive --user-name ${user.username}
+
+# 4. 適切なテスト後、古いキーを削除
+aws iam delete-access-key --access-key-id ${user.accessKeyId} --user-name ${user.username}`,
+          managedWarning
+        };
+      });
+      
+      const managedCount = usersWithDetails.filter(u => u.managedBy).length;
+      
       // 結果を返す
       return {
-        message: dryRun 
-          ? `${exposedKeys.length}個の公開されたIAMアクセスキーが見つかりました（ドライラン）`
-          : `${disabledKeys.filter(k => k.disabled).length}/${exposedKeys.length}個の公開されたIAMアクセスキーを無効化しました`,
-        dryRun,
-        exposedKeysCount: exposedKeys.length,
-        disabledKeys: dryRun ? [] : disabledKeys,
-        exposedKeys
+        message: `${usersWithDetails.length}個の公開されたIAMアクセスキーの無効化を提案します（${managedCount}個はIaCで管理されています）`,
+        summary: {
+          totalExposedKeys: exposedKeys.length,
+          managedByIaC: managedCount
+        },
+        securityRecommendation: '公開されたアクセスキーは直ちに無効化し、新しいキーにローテーションすることを強く推奨します。GitHubなどの公開リポジトリからも漏洩したキーを削除してください。',
+        recommendations,
+        exposedKeys: usersWithDetails
       };
     } catch (error: any) {
       console.error('公開されたIAMアクセスキーの処理中にエラーが発生しました:', error);
@@ -442,11 +499,9 @@ const exposedAccessKeysTool: ToolImplementation = {
   }
 };
 
-// S3バケットのバージョニング有効化ツール
+// S3バケットのバージョニング有効化提案ツール
 const s3BucketVersioningTool: ToolImplementation = {
   async execute(params) {
-    const { dryRun = true } = params;
-    
     try {
       // AWS認証情報を設定（Support APIのリージョンはus-east-1のみ）
       configureAWS('us-east-1');
@@ -475,58 +530,70 @@ const s3BucketVersioningTool: ToolImplementation = {
           region: metadata[2] || 'Unknown', // リージョン（わかる場合）
           createdAt: metadata[3] || 'Unknown' // 作成日
         };
-      });
+      }).filter(bucket => bucket.bucketName); // 空のバケット名をフィルタリング
       
-      // バージョニング有効化ロジック
-      const updatedBuckets: any[] = [];
+      // S3バケットの詳細情報とタグを取得
+      const s3 = new AWS.S3();
+      const bucketsWithDetails: any[] = [];
       
-      if (!dryRun) {
-        // S3クライアントを初期化
-        const s3 = new AWS.S3();
-        
-        for (const bucket of bucketsWithoutVersioning) {
-          if (!bucket.bucketName) continue;
+      for (const bucket of bucketsWithoutVersioning) {
+        try {
+          // バケットのタグを取得
+          const { TagSet } = await s3.getBucketTagging({
+            Bucket: bucket.bucketName
+          }).promise().catch(() => ({ TagSet: [] }));
           
-          try {
-            // バケットのバージョニングを有効化
-            await s3.putBucketVersioning({
-              Bucket: bucket.bucketName,
-              VersioningConfiguration: {
-                Status: 'Enabled'
-              }
-            }).promise();
-            
-            const updatedBucket = {
-              ...bucket,
-              versioningEnabled: true,
-              enabledAt: new Date().toISOString()
-            };
-            
-            updatedBuckets.push(updatedBucket);
-            console.log(`S3バケット ${bucket.bucketName} のバージョニングを有効化しました`);
-          } catch (error: any) {
-            console.error(`S3バケット ${bucket.bucketName} のバージョニング有効化中にエラーが発生しました:`, error);
-            
-            const failedBucket = {
-              ...bucket,
-              versioningEnabled: false,
-              error: error.message || 'Unknown error'
-            };
-            
-            updatedBuckets.push(failedBucket);
-          }
+          // TerraformやCloudFormationで管理されているかチェックするタグを探す
+          const managedBy = TagSet?.find((tag: any) => 
+            ['terraform:managed', 'aws:cloudformation:stack-name'].includes(tag.Key || '')
+          );
+          
+          bucketsWithDetails.push({
+            ...bucket,
+            tags: TagSet?.map((tag: any) => ({ key: tag.Key, value: tag.Value })) || [],
+            managedBy
+          });
+        } catch (error: any) {
+          console.error(`S3バケット ${bucket.bucketName} の詳細取得中にエラーが発生しました:`, error);
+          bucketsWithDetails.push({
+            ...bucket,
+            error: error.message || 'Unknown error'
+          });
         }
       }
       
+      // 提案を生成
+      const recommendations = bucketsWithDetails.map(bucket => {
+        const managedWarning = bucket.managedBy 
+          ? `※注意: このS3バケットは ${bucket.managedBy.key}=${bucket.managedBy.value} で管理されています。変更はIaCツールを通じて行ってください。` 
+          : '';
+        
+        return {
+          bucketName: bucket.bucketName,
+          region: bucket.region,
+          recommendedAction: `バージョニングを有効化する: aws s3api put-bucket-versioning --bucket ${bucket.bucketName} --versioning-configuration Status=Enabled`,
+          terraformExample: bucket.managedBy ? `# Terraformの例:
+resource "aws_s3_bucket_versioning" "${bucket.bucketName.replace(/[.-]/g, '_')}" {
+  bucket = "${bucket.bucketName}"
+  versioning_configuration {
+    status = "Enabled"
+  }
+}` : null,
+          managedWarning
+        };
+      });
+      
+      const managedCount = bucketsWithDetails.filter(b => b.managedBy).length;
+      
       // 結果を返す
       return {
-        message: dryRun 
-          ? `${bucketsWithoutVersioning.length}個のS3バケットがバージョニング有効化の対象です（ドライラン）`
-          : `${updatedBuckets.filter(b => b.versioningEnabled).length}/${bucketsWithoutVersioning.length}個のS3バケットでバージョニングを有効化しました`,
-        dryRun,
-        bucketsWithoutVersioningCount: bucketsWithoutVersioning.length,
-        updatedBuckets: dryRun ? [] : updatedBuckets,
-        buckets: bucketsWithoutVersioning
+        message: `${bucketsWithDetails.length}個のS3バケットでバージョニングを有効化することを提案します（${managedCount}個はIaCで管理されています）`,
+        summary: {
+          totalBucketsWithoutVersioning: bucketsWithoutVersioning.length,
+          managedByIaC: managedCount
+        },
+        recommendations,
+        buckets: bucketsWithDetails
       };
     } catch (error: any) {
       console.error('S3バケットバージョニングの処理中にエラーが発生しました:', error);

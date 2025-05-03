@@ -3,7 +3,7 @@ import { MCPServerConfig, Tool } from './types';
 // Trusted Advisorツール
 const lowUtilizationEC2InstancesTool: Tool = {
   name: 'low_utilization_ec2_instances',
-  description: 'AWS Trusted Advisorを使用して低利用率のEC2インスタンスを特定して停止します',
+  description: 'AWS Trusted Advisorを使用して低利用率のEC2インスタンスを特定し、停止の提案をします（実際に停止はしません）',
   parameters: {
     type: 'object',
     properties: {
@@ -21,11 +21,6 @@ const lowUtilizationEC2InstancesTool: Tool = {
         type: 'string',
         description: 'フィルタリングに使用するタグ値',
         default: 'dev'
-      },
-      dryRun: {
-        type: 'boolean',
-        description: 'テストモード（実際にインスタンスを停止しない）',
-        default: true
       }
     },
     required: ['region']
@@ -34,7 +29,7 @@ const lowUtilizationEC2InstancesTool: Tool = {
 
 const ebsSnapshotsTool: Tool = {
   name: 'ebs_snapshots',
-  description: 'AWS Trusted Advisorを使用して最近バックアップされていないEBSボリュームを特定し、スナップショットを作成します',
+  description: 'AWS Trusted Advisorを使用して最近バックアップされていないEBSボリュームを特定し、スナップショット作成の提案をします（実際に作成はしません）',
   parameters: {
     type: 'object',
     properties: {
@@ -42,11 +37,6 @@ const ebsSnapshotsTool: Tool = {
         type: 'string',
         description: 'AWSリージョン（例：us-east-1、ap-northeast-1）、または "all" ですべてのリージョンを対象',
         default: 'all'
-      },
-      dryRun: {
-        type: 'boolean',
-        description: 'テストモード（実際にスナップショットを作成しない）',
-        default: true
       }
     },
     required: ['region']
@@ -55,31 +45,19 @@ const ebsSnapshotsTool: Tool = {
 
 const exposedAccessKeysTool: Tool = {
   name: 'exposed_access_keys',
-  description: 'AWS Trusted Advisorを使用して公開されたIAMアクセスキーを特定して無効化します',
+  description: 'AWS Trusted Advisorを使用して公開されたIAMアクセスキーを特定し、無効化の提案をします（実際に無効化はしません）',
   parameters: {
     type: 'object',
-    properties: {
-      dryRun: {
-        type: 'boolean',
-        description: 'テストモード（実際にキーを無効化しない）',
-        default: true
-      }
-    }
+    properties: {}
   }
 };
 
 const s3BucketVersioningTool: Tool = {
   name: 's3_bucket_versioning',
-  description: 'AWS Trusted Advisorを使用してバージョニングが有効になっていないS3バケットを特定して有効化します',
+  description: 'AWS Trusted Advisorを使用してバージョニングが有効になっていないS3バケットを特定し、バージョニング有効化の提案をします（実際に有効化はしません）',
   parameters: {
     type: 'object',
-    properties: {
-      dryRun: {
-        type: 'boolean',
-        description: 'テストモード（実際にバージョニングを有効化しない）',
-        default: true
-      }
-    }
+    properties: {}
   }
 };
 
