@@ -1,14 +1,13 @@
 # AWS Trusted Advisor MCP サーバー
 
-このプロジェクトは、AWS Trusted Advisorの機能を活用するMCP (Multimodal Conversational Processing) サーバーを提供します。AWS Trusted Advisorのチェック結果に基づいて、EC2インスタンスの停止、EBSスナップショットの作成など、自動的に問題を修正するツールが含まれています。
+このプロジェクトは、AWS Trusted Advisorの機能を活用するMCP (Multimodal Conversational Processing) サーバーを提供します。AWS Trusted Advisorのチェック結果に基づいて、EC2インスタンスの停止、EBSスナップショットの作成など、推奨される変更を提案します。**重要: このツールは実際に変更を行わず、IaCで管理された環境でも安全に使用できます。**
 
 ## 機能
 
-- **低利用率EC2インスタンスの停止**: Trusted Advisorによって検出された低利用率のEC2インスタンスを特定し、タグに基づいて停止します
-- **EBSスナップショットの作成**: バックアップが不足しているEBSボリュームのスナップショットを自動的に作成します
-- **公開されたアクセスキーの無効化**: 公開されたIAMアクセスキーを検出し、無効化します
-- **S3バケットバージョニングの有効化**: バージョニングが有効になっていないS3バケットを特定し、バージョニングを有効化します
-- その他の基本機能 (hello_world, calculator)
+- **低利用率EC2インスタンスの停止提案**: Trusted Advisorによって検出された低利用率のEC2インスタンスを特定し、タグに基づいて停止の提案をします
+- **EBSスナップショットの作成提案**: バックアップが不足しているEBSボリュームのスナップショット作成を提案します
+- **公開されたアクセスキーの無効化提案**: 公開されたIAMアクセスキーを検出し、無効化の提案をします
+- **S3バケットバージョニングの有効化提案**: バージョニングが有効になっていないS3バケットを特定し、バージョニング有効化の提案をします
 
 ## セットアップ
 
@@ -68,6 +67,47 @@ export AWS_REGION=us-east-1
 
 **重要**: Trusted Advisor APIを使用するには、IAMユーザーに適切な権限が必要です。少なくとも `support:DescribeTrustedAdvisorChecks` および `support:DescribeTrustedAdvisorCheckResult` アクセス許可が必要です。
 
+## Cursorでの設定と使用方法
+
+Cursorエディタでこのツールを使用するには、以下の手順に従ってください：
+
+### 1. MCPサーバーの設定
+
+1. このリポジトリをローカルにクローンします
+2. 依存関係をインストールし、サーバーを起動します
+   ```bash
+   npm install
+   npm run dev
+   ```
+3. サーバーが `http://localhost:3000` で起動していることを確認します
+
+### 2. Cursor MCPプラグインの設定
+
+1. Cursorエディタを開きます
+2. 設定画面を開きます（macOSでは `Cmd+,`、Windowsでは `Ctrl+,`）
+3. 左側のメニューから「Extensions」または「拡張機能」を選択します
+4. 「MCP」セクションを探して選択します
+5. 「Add MCP」または「MCPを追加」ボタンをクリックします
+6. 以下の情報を入力します：
+   - Name: `Trusted Advisor`
+   - URL: `http://localhost:3000`
+7. 「Add」または「追加」ボタンをクリックして保存します
+
+### 3. Cursor内での使用方法
+
+1. コマンドパレットを開きます（macOSでは `Cmd+Shift+P`、Windowsでは `Ctrl+Shift+P`）
+2. `MCP: Switch MCP Server` と入力します
+3. リストから「Trusted Advisor」を選択します
+4. これで、AIアシスタントとのチャットでTrusted Advisorのツールが使用できるようになります
+5. チャットで「低利用率EC2インスタンスをチェックしてください」などと指示すると、MCPサーバーを通じてAWS環境の分析結果が表示されます
+
+### 4. チャットプロンプトの例
+
+- 「低利用率のEC2インスタンスをチェックして、停止すべきインスタンスを提案してください」
+- 「バックアップが必要なEBSボリュームをスキャンして、スナップショット作成が必要なものを教えてください」
+- 「公開されているIAMアクセスキーがないか確認してください」
+- 「バージョニングが有効になっていないS3バケットをチェックしてください」
+
 ## 使用方法
 
 サーバーが起動すると、以下のエンドポイントが利用可能になります：
@@ -78,63 +118,79 @@ export AWS_REGION=us-east-1
 
 ### ツールの実行例
 
-#### 低利用率EC2インスタンスの停止
+#### 低利用率EC2インスタンスの停止提案
 
 ```bash
 curl -X POST http://localhost:3000/execute \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "low_utilization_ec2_instances",
+    "toolName": "low_utilization_ec2_instances",
     "parameters": {
       "region": "us-east-1",
       "tagKey": "environment",
-      "tagValue": "dev",
-      "dryRun": true
+      "tagValue": "dev"
     }
   }'
 ```
 
-#### EBSスナップショットの作成
+#### EBSスナップショットの作成提案
 
 ```bash
 curl -X POST http://localhost:3000/execute \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "ebs_snapshots",
+    "toolName": "ebs_snapshots",
     "parameters": {
-      "region": "all",
-      "dryRun": true
+      "region": "all"
     }
   }'
 ```
 
-#### 公開されたアクセスキーの無効化
+#### 公開されたアクセスキーの無効化提案
 
 ```bash
 curl -X POST http://localhost:3000/execute \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "exposed_access_keys",
-    "parameters": {
-      "dryRun": true
-    }
+    "toolName": "exposed_access_keys",
+    "parameters": {}
   }'
 ```
 
-#### S3バケットバージョニングの有効化
+#### S3バケットバージョニングの有効化提案
 
 ```bash
 curl -X POST http://localhost:3000/execute \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "s3_bucket_versioning",
-    "parameters": {
-      "dryRun": true
-    }
+    "toolName": "s3_bucket_versioning",
+    "parameters": {}
   }'
 ```
 
-**注意**: 実際の環境で実行する前に、`dryRun: true` で実行してテストすることをお勧めします。`dryRun: false` に設定すると、実際の変更が適用されます。
+### 推奨事項のフォーマット
+
+このツールは各リソースに対して以下の情報を含む推奨事項を提供します：
+
+- **recommendedAction**: 実行すべきAWS CLIコマンド
+- **terraformExample**: IaCで管理されているリソース向けのTerraformコード例
+- **managedWarning**: リソースがIaCで管理されている場合の警告メッセージ
+
+例：
+
+```json
+{
+  "recommendations": [
+    {
+      "instanceId": "i-0123456789abcdef0",
+      "region": "us-east-1",
+      "recommendedAction": "aws ec2 stop-instances --instance-ids i-0123456789abcdef0 --region us-east-1",
+      "terraformExample": "# Terraformの例:\nresource \"aws_instance\" \"0123456789abcdef0\" {\n  # 他の設定はそのままに\n  instance_id = \"i-0123456789abcdef0\"\n  # インスタンスを停止状態に設定\n  instance_initiated_shutdown_behavior = \"stop\"\n}",
+      "managedWarning": "※注意: このインスタンスは terraform:managed=true で管理されています。変更はIaCツールを通じて行ってください。"
+    }
+  ]
+}
+```
 
 ## カスタムツールの追加
 
@@ -142,7 +198,7 @@ curl -X POST http://localhost:3000/execute \
 
 1. `src/config.ts` にツール定義を追加
 2. `src/tools.ts` に実装を追加
-3. 実装を `toolImplementations` オブジェクトに登録
+3. 実装を `implementTools` オブジェクトに登録
 
 ## ライセンス
 
